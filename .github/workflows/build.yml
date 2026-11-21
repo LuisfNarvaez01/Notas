@@ -1,0 +1,63 @@
+name: Verify and package
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.7'
+          cache: true
+      - run: ./scripts/build-release.ps1 -Platform windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hilva-windows
+          path: build/distribution/*
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.7'
+          cache: true
+      - name: Restore stable release signing identity
+        env:
+          KEYSTORE_BASE64: ${{ secrets.HILVA_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.HILVA_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.HILVA_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.HILVA_KEY_ALIAS }}
+        run: |
+          test -n "$KEYSTORE_BASE64" || { echo "Missing signing secrets"; exit 1; }
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/hilva-release.jks
+          python3 - <<'PY'
+          import os
+          def escape(s):
+              return s.replace('\\', '\\\\').replace(':', '\\:').replace('=', '\\=')
+          values = {'storePassword': os.environ['STORE_PASSWORD'], 'keyPassword': os.environ['KEY_PASSWORD'], 'keyAlias': os.environ['KEY_ALIAS'], 'storeFile': '../hilva-release.jks'}
+          with open('android/key.properties', 'w') as f:
+              for k, v in values.items(): f.write(k + '=' + escape(v) + '\n')
+          PY
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build apk --release
+      - run: |
+          mkdir -p build/distribution
+          cp build/app/outputs/flutter-apk/app-release.apk build/distribution/hilva-android.apk
+          cd build/distribution
+          sha256sum hilva-android.apk > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hilva-android
+          path: build/distribution/*

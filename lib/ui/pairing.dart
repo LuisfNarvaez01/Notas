@@ -148,7 +148,7 @@ class _PairingPanelState extends State<PairingPanel> {
           ),
         const SizedBox(height: 8),
         Text(
-          'La sincronización se repite con Hilva abierta; en Windows también desde la bandeja. Si Android suspende la app, se retoma al abrirla. Si cambia la dirección de red, vuelve a vincular. Máximo 45 MB de adjuntos por intercambio.',
+          'Sincronización automática cada 5 minutos con Hilva abierta; en Windows también desde la bandeja. Puedes usar Sincronizar ahora cuando quieras. Al volver a abrirla se sincroniza si ya pasaron 5 minutos. Si cambia la dirección de red, vuelve a vincular. Máximo 45 MB de adjuntos por intercambio.',
           style: Theme.of(context).textTheme.bodySmall,
         ),
       ],

@@ -12,7 +12,7 @@ void main() {
       final service = AiService(
         client: MockClient((request) async {
           final data = jsonDecode(request.body);
-          expect(data['max_completion_tokens'], 32);
+          expect(data['max_completion_tokens'], 64);
           expect(
             data['messages'][1]['content'],
             contains('Prueba de conexión'),

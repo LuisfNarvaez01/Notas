@@ -15,6 +15,7 @@ import 'services/lan_service.dart';
 import 'services/native_service.dart';
 import 'ui/theme.dart';
 import 'ui/settings.dart';
+import 'ui/note_selection.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -101,6 +102,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   final secure = const FlutterSecureStorage();
   int section = 0;
   String? projectId, selectedId;
+  final selectedNotes = <String>{};
+  bool selectingNotes = false;
+  DateTime? lastAutomaticSync;
+  static const syncInterval = Duration(minutes: 5);
   String status = 'Todas';
   bool busy = false, recording = false, syncing = false;
   String? recordingPath;
@@ -151,15 +156,21 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     }
     final initial = await NativeService.initialText();
     if (initial != null && mounted) setState(() => capture.text = initial);
-    syncTimer = Timer.periodic(
-      const Duration(seconds: 10),
-      (_) => sync(silent: true),
-    );
+    if (mounted) unawaited(sync(silent: true));
+  }
+
+  void scheduleSync() {
+    syncTimer?.cancel();
+    if (mounted) syncTimer = Timer(syncInterval, () => sync(silent: true));
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) sync(silent: true);
+    if (state == AppLifecycleState.resumed &&
+        (lastAutomaticSync == null ||
+            DateTime.now().difference(lastAutomaticSync!) >= syncInterval)) {
+      sync(silent: true);
+    }
   }
 
   @override
@@ -182,11 +193,14 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   }
 
   Future<void> sync({bool silent = false}) async {
-    if (syncing) return;
+    if (!mounted || syncing) return;
+    syncTimer?.cancel();
     if (!lan.paired) {
       if (!silent) message('Vincula tus dispositivos desde Ajustes.');
+      scheduleSync();
       return;
     }
+    lastAutomaticSync = DateTime.now();
     setState(() => syncing = true);
     try {
       await lan.sync();
@@ -197,6 +211,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       }
     } finally {
       if (mounted) setState(() => syncing = false);
+      scheduleSync();
     }
   }
 
@@ -217,9 +232,22 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       capture.clear();
       setState(() => attachments = []);
       message('Guardado en este dispositivo.');
-      unawaited(sync(silent: true));
     } catch (e) {
       message('No se pudo guardar. El borrador sigue aquí.');
+    }
+  }
+
+  void toggleNote(String id) => setState(() {
+    selectingNotes = true;
+    if (!selectedNotes.add(id)) selectedNotes.remove(id);
+  });
+
+  Future<void> copyNotes(List<Entry> notes) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: notesPlainText(notes)));
+      message('${notes.length} notas copiadas como texto.');
+    } catch (_) {
+      message('No se pudo copiar al portapapeles. Reintenta.');
     }
   }
 
@@ -453,6 +481,28 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                                           ),
                                         ],
                                       ),
+                                    ),
+                                    NoteSelectionBar(
+                                      notes: notes,
+                                      selected: selectedNotes,
+                                      selecting: selectingNotes,
+                                      onToggleMode: () => setState(() {
+                                        selectingNotes = !selectingNotes;
+                                        selectedNotes.clear();
+                                      }),
+                                      onSelectAll: () => setState(() {
+                                        final all = notes.every(
+                                          (n) => selectedNotes.contains(n.id),
+                                        );
+                                        for (final note in notes) {
+                                          if (all) {
+                                            selectedNotes.remove(note.id);
+                                          } else {
+                                            selectedNotes.add(note.id);
+                                          }
+                                        }
+                                      }),
+                                      onCopy: copyNotes,
                                     ),
                                     Expanded(
                                       child: notes.isEmpty
@@ -813,13 +863,19 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   Widget noteTile(Entry e, bool wide) {
     final project = e.projectId == null ? null : store.find(e.projectId!);
     return Material(
-      color: selectedId == e.id
+      color:
+          (selectingNotes ? selectedNotes.contains(e.id) : selectedId == e.id)
           ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: .5)
           : Colors.transparent,
       borderRadius: BorderRadius.circular(14),
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
+        onLongPress: () => toggleNote(e.id),
         onTap: () {
+          if (selectingNotes) {
+            toggleNote(e.id);
+            return;
+          }
           if (wide) {
             setState(() => selectedId = e.id);
           } else {
@@ -841,6 +897,12 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
             children: [
               Row(
                 children: [
+                  if (selectingNotes)
+                    Checkbox(
+                      value: selectedNotes.contains(e.id),
+                      onChanged: (_) => toggleNote(e.id),
+                      semanticLabel: 'Seleccionar ${e.title}',
+                    ),
                   Icon(
                     e.payload['isLink'] == true
                         ? Icons.link
@@ -1036,7 +1098,9 @@ class _NoteEditorState extends State<NoteEditor> {
       final key = await secure.read(key: '${provider}Key') ?? '';
       final model =
           await widget.store.setting('${provider}Model') ??
-          (provider == 'groq' ? 'llama-3.3-70b-versatile' : 'gemini-2.5-flash');
+          (provider == 'groq'
+              ? AiService.defaultGroqModel
+              : AiService.defaultGeminiModel);
       if (key.isEmpty) throw Exception('Añade tu API key en Ajustes.');
       final context = entry.projectId == null
           ? ''

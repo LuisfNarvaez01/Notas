@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'native_service.dart';
+import 'windows_updater.dart';
 
 class ReleaseUpdate {
   final String version, notes, assetName, checksum;
@@ -143,33 +144,38 @@ class UpdateService {
     if (!Platform.isWindows) {
       throw UnsupportedError('Plataforma no disponible.');
     }
-    final helper = File(
-      p.join(p.dirname(Platform.resolvedExecutable), 'update-windows.ps1'),
+    final destination = p.dirname(Platform.resolvedExecutable);
+    await WindowsUpdater.prepare(
+      helperPath: p.join(destination, 'update-windows.ps1'),
+      archivePath: file.path,
+      destination: destination,
+      temporaryDirectory: (await getTemporaryDirectory()).path,
+      statePath: await windowsStatePath(),
+      waitPid: pid,
     );
-    if (!await helper.exists()) {
-      throw StateError('Falta el asistente; usa el paquete portable completo.');
-    }
-    final copy = await helper.copy(
-      p.join((await getTemporaryDirectory()).path, 'hilva-update-$pid.ps1'),
-    );
-    await Process.start('powershell.exe', [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-WindowStyle',
-      'Hidden',
-      '-File',
-      copy.path,
-      '-Archive',
-      file.absolute.path,
-      '-Destination',
-      p.dirname(Platform.resolvedExecutable),
-      '-WaitPid',
-      '$pid',
-      '-ExpectedHash',
-      (await sha256.bind(file.openRead()).first).toString(),
-    ], mode: ProcessStartMode.detached);
     exit(0);
+  }
+
+  static Future<String> windowsStatePath() async => p.join(
+    (await getApplicationSupportDirectory()).path,
+    'hilva-update-status.json',
+  );
+
+  static Future<String?> lastWindowsFailure() async {
+    if (!Platform.isWindows) return null;
+    try {
+      final file = File(await windowsStatePath());
+      if (!await file.exists()) return null;
+      final state = jsonDecode(
+        (await file.readAsString()).replaceFirst('\uFEFF', ''),
+      );
+      if (state['status'] == 'failed') {
+        return 'La última actualización no se completó: ${state['message']}';
+      }
+    } catch (_) {
+      /* Older releases have no status file. */
+    }
+    return null;
   }
 
   void dispose() => _client.close();

@@ -20,6 +20,7 @@ class SettingsPanel extends StatefulWidget {
   final ValueChanged<ThemeMode> onTheme;
   final ValueChanged<String> onMessage;
   final VoidCallback onSync;
+  final AiService Function() aiFactory;
   const SettingsPanel({
     super.key,
     required this.store,
@@ -28,6 +29,7 @@ class SettingsPanel extends StatefulWidget {
     required this.onTheme,
     required this.onMessage,
     required this.onSync,
+    this.aiFactory = AiService.new,
   });
   @override
   State<SettingsPanel> createState() => _SettingsPanelState();
@@ -40,6 +42,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
       geminiModel = TextEditingController();
   String provider = 'groq';
   bool saving = false, loading = true, autoStart = false;
+  final Map<String, String> connectionStatus = {};
+  String? updateFailure;
   final secure = const FlutterSecureStorage();
   @override
   void initState() {
@@ -51,11 +55,13 @@ class _SettingsPanelState extends State<SettingsPanel> {
     groq.text = await secure.read(key: 'groqKey') ?? '';
     gemini.text = await secure.read(key: 'geminiKey') ?? '';
     groqModel.text =
-        await widget.store.setting('groqModel') ?? 'llama-3.3-70b-versatile';
+        await widget.store.setting('groqModel') ?? AiService.defaultGroqModel;
     geminiModel.text =
-        await widget.store.setting('geminiModel') ?? 'gemini-2.5-flash';
+        await widget.store.setting('geminiModel') ??
+        AiService.defaultGeminiModel;
     provider = await widget.store.setting('provider') ?? 'groq';
     autoStart = await widget.store.setting('autoStart') == 'true';
+    updateFailure = await UpdateService.lastWindowsFailure();
     if (mounted) setState(() => loading = false);
   }
 
@@ -70,8 +76,14 @@ class _SettingsPanelState extends State<SettingsPanel> {
   Future<void> save() async {
     setState(() => saving = true);
     try {
-      await secure.write(key: 'groqKey', value: groq.text.trim());
-      await secure.write(key: 'geminiKey', value: gemini.text.trim());
+      await secure.write(
+        key: 'groqKey',
+        value: AiService.normalizeKey(groq.text),
+      );
+      await secure.write(
+        key: 'geminiKey',
+        value: AiService.normalizeKey(gemini.text),
+      );
       for (final item in {
         'groqModel': groqModel.text.trim(),
         'geminiModel': geminiModel.text.trim(),
@@ -90,22 +102,104 @@ class _SettingsPanelState extends State<SettingsPanel> {
   }
 
   Future<void> testKey(String provider) async {
-    setState(() => saving = true);
-    final ai = AiService();
+    final key = AiService.normalizeKey(
+      (provider == 'groq' ? groq : gemini).text,
+    );
+    final model = (provider == 'groq' ? groqModel : geminiModel).text.trim();
+    setState(() {
+      saving = true;
+      connectionStatus[provider] = 'Comprobando clave y respuesta del modelo…';
+    });
+    final ai = widget.aiFactory();
     try {
-      await ai.testConnection(
-        provider: provider,
-        apiKey: (provider == 'groq' ? groq : gemini).text.trim(),
-        model: (provider == 'groq' ? groqModel : geminiModel).text.trim(),
-      );
-      widget.onMessage('$provider: conexión y modelo verificados.');
+      await ai.testConnection(provider: provider, apiKey: key, model: model);
+      await secure.write(key: '${provider}Key', value: key);
+      await widget.store.setSetting('${provider}Model', model);
+      await widget.store.setSetting('provider', provider);
+      this.provider = provider;
+      connectionStatus[provider] =
+          'Conexión verificada. $provider activo; clave y modelo guardados en este dispositivo.';
+      widget.onMessage('$provider: conexión verificada y guardada.');
     } catch (e) {
+      connectionStatus[provider] = '$e';
       widget.onMessage('$e');
     } finally {
       ai.dispose();
       if (mounted) setState(() => saving = false);
     }
   }
+
+  Future<void> chooseModel(String name) async {
+    setState(() => saving = true);
+    final ai = widget.aiFactory();
+    try {
+      final models = await ai.listModels(
+        provider: name,
+        apiKey: (name == 'groq' ? groq : gemini).text,
+      );
+      if (!mounted) return;
+      final controller = name == 'groq' ? groqModel : geminiModel;
+      final model = await showDialog<String>(
+        context: context,
+        builder: (ctx) => SimpleDialog(
+          title: Text('Modelos de ${name == 'groq' ? 'Groq' : 'Gemini'}'),
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(24, 0, 24, 12),
+              child: Text(
+                'Catálogo actual. El acceso y la cuota se comprueban con Probar y guardar.',
+              ),
+            ),
+            for (final id in models)
+              SimpleDialogOption(
+                onPressed: () => Navigator.pop(ctx, id),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(id),
+                ),
+              ),
+          ],
+        ),
+      );
+      if (model != null && mounted) {
+        controller.text = model;
+        connectionStatus[name] =
+            'Modelo seleccionado. Pulsa Probar y guardar para verificarlo.';
+      }
+    } catch (e) {
+      connectionStatus[name] = '$e';
+      widget.onMessage('$e');
+    } finally {
+      ai.dispose();
+      if (mounted) setState(() => saving = false);
+    }
+  }
+
+  Widget connectionActions(String name) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Wrap(
+        spacing: 8,
+        children: [
+          TextButton(
+            onPressed: saving ? null : () => chooseModel(name),
+            child: const Text('Elegir modelo'),
+          ),
+          OutlinedButton(
+            onPressed: saving ? null : () => testKey(name),
+            child: Text(
+              'Probar y guardar ${name == 'groq' ? 'Groq' : 'Gemini'}',
+            ),
+          ),
+        ],
+      ),
+      if (connectionStatus[name] != null)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: SelectableText(connectionStatus[name]!),
+        ),
+    ],
+  );
 
   Future<void> backup() async {
     try {
@@ -144,8 +238,8 @@ class _SettingsPanelState extends State<SettingsPanel> {
 
   Future<void> update() async {
     setState(() => saving = true);
+    final service = UpdateService();
     try {
-      final service = UpdateService();
       final release = await service.check();
       if (!mounted) return;
       if (release == null) {
@@ -174,12 +268,14 @@ class _SettingsPanelState extends State<SettingsPanel> {
         ),
       );
       if (ok == true) {
+        widget.onMessage('Descargando y verificando la actualización…');
         final file = await service.download(release);
         await service.install(file);
       }
     } catch (e) {
       widget.onMessage('No se pudo actualizar: $e');
     } finally {
+      service.dispose();
       if (mounted) setState(() => saving = false);
     }
   }
@@ -196,6 +292,7 @@ class _SettingsPanelState extends State<SettingsPanel> {
       obscureText: secret,
       enableSuggestions: !secret,
       autocorrect: false,
+      enabled: !saving,
       decoration: InputDecoration(labelText: name, hintText: hint),
     ),
   );
@@ -265,16 +362,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
                 ),
                 field('API key de Groq', groq, secret: true),
                 field('Modelo de Groq', groqModel),
-                OutlinedButton(
-                  onPressed: saving ? null : () => testKey('groq'),
-                  child: const Text('Probar conexión de Groq'),
-                ),
+                connectionActions('groq'),
                 field('API key de Gemini', gemini, secret: true),
                 field('Modelo de Gemini', geminiModel),
-                OutlinedButton(
-                  onPressed: saving ? null : () => testKey('gemini'),
-                  child: const Text('Probar conexión de Gemini'),
-                ),
+                connectionActions('gemini'),
                 const SizedBox(height: 10),
                 Text(
                   'Los modelos y las cuotas dependen de tu cuenta. Si se agotan, puedes seguir guardando notas. El nivel gratuito de Gemini puede usar contenido para mejorar sus productos.',
@@ -327,9 +418,10 @@ class _SettingsPanelState extends State<SettingsPanel> {
                   ),
                 ],
                 heading(
-                  'Hilva 1.1.0',
+                  'Hilva 1.1.1',
                   'Ideas que toman forma. Actualizaciones desde GitHub Releases.',
                 ),
+                if (updateFailure != null) SelectableText(updateFailure!),
                 OutlinedButton.icon(
                   onPressed: saving ? null : update,
                   icon: const Icon(Icons.system_update_alt),

@@ -23,7 +23,7 @@ CI necesita secretos HILVA_KEYSTORE_BASE64 (el mismo almacén), HILVA_STORE_PASS
 
 El ZIP contiene todo Release (exe, DLL, data y update-windows.ps1). No distribuir el exe solo. El runtime Microsoft Visual C++ puede requerir instalación en una máquina limpia: validar antes de distribuir. Binarios sin firma comercial pueden mostrar SmartScreen.
 
-La app registra hilva:// para el usuario actual, en la ruta del ejecutable actual, sin admin. Si se mueve el portable, abrirlo de nuevo registra su nueva ruta. El plugin app_links 7.2.2 recibe el enlace inicial y reenvía enlaces a la instancia abierta mediante SendAppLinkToInstance. Permitir hilva://login-callback/ en Supabase. Probar OAuth real con configuración del proyecto antes de darlo por validado.
+Desde 1.1 no hay OAuth, Supabase ni inicio de sesión. La sincronización se vincula por QR/código en la red local.
 
 Ctrl+Shift+H abre captura; si otro programa ocupa ese atajo puede no registrarse. Minimizar oculta en bandeja; cerrar sale. Menú de bandeja: abrir, capturar, salir. NativeService.setAutoStart permite la preferencia opcional de inicio (HKCU Run); la UI debe solicitarla al usuario.
 
@@ -35,7 +35,7 @@ La app consulta Releases/latest sin token. No instala prereleases ni versiones i
 
 Android usa FileProvider limitado a updates/ y abre el instalador del sistema con confirmación. Puede requerir habilitar “instalar apps desconocidas” para Hilva; volver a intentar tras concederlo. Nunca instalación silenciosa.
 
-Windows ejecuta el helper solo tras confirmación de UI y guardado. El helper revisa hash y rutas del ZIP, extrae a staging junto al portable, espera cierre y sustituye con backup completo del directorio anterior. Si falla el segundo movimiento, restaura el anterior. Conserva backup para recuperación; si el arranque nuevo falla después de lanzarlo, restaurar manualmente el backup. No detecta salud del nuevo proceso. Los datos de usuario deben estar en ApplicationSupport, fuera del portable. El directorio padre debe permitir escritura.
+Windows ejecuta el helper solo tras confirmación de UI. Desde 1.1.1 lo inicia oculto con handles válidos y directorio de trabajo temporal; espera confirmación de preparación antes de cerrar Hilva. El resultado queda en ApplicationSupport/hilva-update-status.json y los errores se muestran en Ajustes. El helper revisa hash y rutas del ZIP, extrae a staging junto al portable, espera cierre y sustituye con backup completo del directorio anterior. Si falla el segundo movimiento, restaura el anterior. Conserva backup para recuperación; si el arranque nuevo falla después de lanzarlo, restaurar manualmente el backup. No detecta salud del nuevo proceso. Los datos de usuario deben estar en ApplicationSupport, fuera del portable. El directorio padre debe permitir escritura.
 
 ## Captura Android
 
@@ -43,4 +43,6 @@ Widget de pantalla principal abre captura; compartir texto/enlaces y hasta 12 im
 
 ## Comprobación en dispositivos pendiente
 
-Probar APK v1→v2 con mismo certificado, cancelación de instalador, descarga cortada, hash incorrecto, desconocidos deshabilitado, compartir desde redes, imágenes y widget tras muerte del proceso. Probar Windows limpio, bandeja, atajo ocupado, OAuth con app abierta/cerrada, actualización con espacios en la ruta, recuperación y conservación de SQLite/adjuntos/claves. Estas pruebas necesitan dispositivos, releases y credenciales reales; no se sustituyen por compilar.
+Probar APK v1→v2 con mismo certificado, cancelación de instalador, descarga cortada, hash incorrecto, desconocidos deshabilitado, compartir desde redes, imágenes y widget tras muerte del proceso. Probar Windows limpio, bandeja, atajo ocupado, emparejamiento local, recuperación y conservación de SQLite/adjuntos/claves. Estas pruebas necesitan dispositivos, releases y credenciales reales; no se sustituyen por compilar.
+
+Prueba de regresión Windows disponible: `./scripts/test-windows-update.ps1 -PreviousArchive <zip-anterior> -NewArchive <zip-nuevo>`. Ver [verificación 1.1.1](UPDATE-1.1.1.md).
